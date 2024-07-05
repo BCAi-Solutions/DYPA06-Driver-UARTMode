@@ -41,7 +41,7 @@ DYPA06_DIST_Drv_t DYPA06_DIST_Driver =
  */
 
 /* UART Triger (request) Command */
-#define DYPA06_REQ_CMD 			0x01
+#define DYPA06_REQ_CMD 			1U
 /* Trigger (request) Command processing delay (mS) */
 #define DYPA06_REQ_DLY 			50
 /* Delay Between Multi Sampling Polls (mS) */
@@ -64,7 +64,7 @@ typedef struct
   uint8_t 		Stx;
   uint8_t 		Distance_h;
   uint8_t 		Distance_l;
-  uint8_t		Sum;
+  uint8_t			Sum;
 } DYPA06_Distance_Data;
 
 
@@ -96,10 +96,10 @@ uint8_t dypa06_req_cmd = DYPA06_REQ_CMD;
  */
 int32_t DYPA06_RegisterBusIO(DYPA06_Object_t *pObj, DYPA06_IO_t *pIO)
 {
-  int32_t ret;
+  int32_t ret = DYPA06_OK;
 
   if (pObj == NULL)
-	return DYPA06_ERROR;
+  	return DYPA06_ERROR;
 
   pObj->IO.Init			= pIO->Init;
   pObj->IO.DeInit		= pIO->DeInit;
@@ -110,12 +110,20 @@ int32_t DYPA06_RegisterBusIO(DYPA06_Object_t *pObj, DYPA06_IO_t *pIO)
 
   if (pObj->IO.Init != NULL)
   {
-	ret = pObj->IO.Init();
+  	ret = pObj->IO.Init();
   }
-  else
-  {
-	ret = DYPA06_ERROR;
-  }
+
+  if (ret != DYPA06_OK)
+	{
+		return ret;
+	}
+
+  GPIO_InitTypeDef GPIOInit = {
+  	.Pin = pObj->IO.EnablePin,
+		.Mode = GPIO_MODE_OUTPUT_PP,
+		.Pull = GPIO_NOPULL
+  };
+  HAL_GPIO_Init(pObj->IO.EnablePort, &GPIOInit);
 
   return ret;
 }
@@ -284,7 +292,7 @@ int32_t DYPA06_DIST_GetDistance(DYPA06_Object_t *pObj, uint16_t *Value)
   /* Pass-through Single Poll mode */
   if ( pObj->dist_samples == 1 )
   {
-	return dypa06_poll_distance(pObj, Value);
+  	return dypa06_poll_distance(pObj, Value);
   }
 
   /* Collect Samples */
@@ -304,20 +312,24 @@ int32_t DYPA06_DIST_GetDistance(DYPA06_Object_t *pObj, uint16_t *Value)
 	  if ( sample >= DYPA06_DISTANCE_MIN )
 	  {
 	    /* Add valid sample to Set */
-		distData[i++] = sample;
+	  	distData[i++] = sample;
 	    continue;
 	  }
 
 	  /* Invalid Data */
 	  if ( ++countValErr >= MAX_VAL_ERRORS )
+	  {
 	    return DYPA06_ERROR_PERIHPERAL;
+	  }
 
 	  continue;
 	}
 
 	/* Bus Failure */
 	if ( ++countBusErr >= MAX_BUS_ERRORS )
+	{
 	  return DYPA06_ERROR_BUS;
+	}
 
 	continue;
   }
@@ -329,11 +341,11 @@ int32_t DYPA06_DIST_GetDistance(DYPA06_Object_t *pObj, uint16_t *Value)
   uint8_t median_index = ( nSamples / 2 );
   if ( ( nSamples % 2 ) == 0 )
   {
-	*Value = distData[median_index];
+  	*Value = distData[median_index];
   }
   else
   {
-	*Value = ( ( distData[median_index] + distData[median_index + 1] ) / 2 );
+  	*Value = ( ( distData[median_index] + distData[median_index + 1] ) / 2 );
   }
 
   return ret;
@@ -349,13 +361,13 @@ static int32_t DYPA06_Initialise(DYPA06_Object_t *pObj)
   /* Power off Component */
   if (dypa06_power_on_set(&(pObj->IO), RESET) != DYPA06_OK)
   {
-	return DYPA06_ERROR;
+  	return DYPA06_ERROR;
   }
 
   /* Set Default number of samples */
   if (DYPA06_DIST_SetSamples(pObj, 1U) != DYPA06_OK)
   {
-	return DYPA06_ERROR;
+  	return DYPA06_ERROR;
   }
 
   return DYPA06_OK;
@@ -396,34 +408,40 @@ int32_t dypa06_poll_distance(DYPA06_Object_t *pObj, uint16_t *val)
 
   /* Validate Function Parameters */
   if ( pObj == NULL || val == NULL )
-	return DYPA06_ERROR_INVALID_PARAM;
+  {
+  	return DYPA06_ERROR_INVALID_PARAM;
+  }
 
   DYPA06_Distance_Data data = {0};
 
   /* Initiate Trigger Request */
   ret = pObj->IO.Send(&dypa06_req_cmd, 1U);
   if ( ret < 1U )
-	return DYPA06_ERROR_PERIHPERAL;
+  {
+  	return DYPA06_ERROR_PERIHPERAL;
+  }
 
   /* Delay to allow sensor processing */
   HAL_Delay(DYPA06_REQ_DLY);
 
   /* Begin Polling */
-  ret = pObj->IO.Recv(&data.Stx, 1U);
-  if ( ret != 0U )
-	return DYPA06_ERROR_TIMEOUT;
+  ret = pObj->IO.Recv((uint8_t *) &data.Stx, 4U);
+  if (ret != 0U )
+  {
+  	return DYPA06_ERROR_TIMEOUT;
+  }
 
   /* Validate Start Byte */
   if ( data.Stx != 0xFF )
-	return DYPA06_ERROR_PERIHPERAL;
+  {
+  	return DYPA06_ERROR_PERIHPERAL;
+  }
 
-  /* Poll Remaining Distance Data */
-  ret = pObj->IO.Recv((uint8_t *) &data.Distance_h, 3U);
-  if (ret != 0U )
-	return DYPA06_ERROR_TIMEOUT;
   /* Validate Sensor Data */
   if ( ( ( data.Stx + data.Distance_h + data.Distance_l ) & 0xFF ) != data.Sum )
-	return DYPA06_ERROR_CRC;
+  {
+  	return DYPA06_ERROR_CRC;
+  }
 
   /* Copy Distance value to Export pointer */
   *val = ( ( data.Distance_h << 8 ) | data.Distance_l );
